@@ -1,4 +1,4 @@
-MLB-Stats-API
+MLB-StatsAPI
 pandas
 requests
 pybaseball
