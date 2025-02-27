@@ -196,7 +196,7 @@ for (statcast_status, on_tv), group in sorted_groups:
 
 st.write("File created successfully!")
 
-st.download_button(f"Download Text File for Pitcher Performances from {date + timedelta(days=-1)}", html_content, file_name=f"output_{date + timedelta(days=-1)}")
+st.download_button(f"Download Text File for Pitcher Performances from {date + timedelta(days=-1)}", html_content, file_name=f"output_{date + timedelta(days=-1)}.txt")
 
 
 on_tv_today = request_today.json()
