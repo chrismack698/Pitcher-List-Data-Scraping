@@ -9,22 +9,20 @@ import requests as r
 from datetime import date, timedelta
 
 st.title("Spring Training Pitcher File Generator")
-date = st.date_input("Select Date", value="today", min_value=None, max_value=None, format="YYYY/MM/DD")
+selected_date = st.date_input("Select Date", value="today", min_value=None, max_value=None, format="YYYY/MM/DD")
 
-if date is not None:
+if selected_date is not None:
     st.write("Date selected...")
 
-base_url = 'https://baseballsavant.mlb.com/gf?game_pk='
-
 try:
-    request_yesterday = r.get(f'https://statsapi.mlb.com/api/v1/schedule?date={date + timedelta(days=-1)}&sportId=1&hydrate=broadcasts,probablePitcher(note)')
-    request_today = r.get(f'https://statsapi.mlb.com/api/v1/schedule?date={date}&sportId=1&hydrate=broadcasts,probablePitcher(note)')
+    request_yesterday = r.get(f'https://statsapi.mlb.com/api/v1/schedule?date={selected_date + timedelta(days=-1)}&sportId=1&hydrate=broadcasts,probablePitcher(note)')
+    request_today = r.get(f'https://statsapi.mlb.com/api/v1/schedule?date={selected_date}&sportId=1&hydrate=broadcasts,probablePitcher(note)')
 except Exception as e:
     st.error(f"Failed to fetch schedule data: {e}")
     st.stop()
 
 game_ids = []
-games = statsapi.schedule(start_date=date + timedelta(days=-1), end_date=date + timedelta(days=-1))
+games = statsapi.schedule(start_date=selected_date + timedelta(days=-1), end_date=selected_date + timedelta(days=-1))
 
 for i in games:
     game_ids.append(i['game_id'])
@@ -42,36 +40,18 @@ def parse_game_data(data):
     return df
 
 
-today_data = request_yesterday.json()
-on_tv = parse_game_data(today_data)
+yesterday_data = request_yesterday.json()
+on_tv = parse_game_data(yesterday_data)
 
 # ── Yesterday's game log ──────────────────────────────────────────────────────
 
 if not game_ids:
-    st.warning(f"No games found for {date + timedelta(days=-1)}. The yesterday's pitcher file cannot be generated.")
+    st.warning(f"No games found for {selected_date + timedelta(days=-1)}. The yesterday's pitcher file cannot be generated.")
 else:
     dfs = []
 
     for i in game_ids:
         try:
-            game_id_str = str(i)
-            response = r.get(base_url + game_id_str)
-            response_json = response.json()
-
-            # Gracefully handle missing keys in the Savant response
-            scoreboard = response_json.get('scoreboard', {})
-            stats = scoreboard.get('stats', {})
-            pitch_velocity = stats.get('pitchVelocity', {})
-            game_status_code = response_json.get('game_status_code', '')
-
-            if game_status_code != 'C':
-                if pitch_velocity and pitch_velocity.get('topPitches'):
-                    statcast_status = "Statcast Games"
-                else:
-                    statcast_status = "No Statcast"
-            else:
-                statcast_status = 'Cancelled'
-
             boxscore = statsapi.boxscore_data(i)
             if not boxscore:
                 st.warning(f"No boxscore data for game {i}. Skipping.")
@@ -92,7 +72,6 @@ else:
                 df['teamname'] = abbr
                 df['game_info'] = game_info
                 df['game_id'] = i
-                df['statcast_status'] = statcast_status
 
             dfs.append(games_box_home)
             dfs.append(games_box_away)
@@ -121,44 +100,32 @@ else:
             filtered_df = filtered_df.copy()
             filtered_df['full_name'] = pitcher_names
 
-            filtered_df_update = filtered_df.iloc[:, [1, 2, 4, 5, 6]].astype(str).apply(lambda x: x + ' ' + x.name.upper())
-            filtered_df_update['full_name'] = filtered_df['full_name']
-            filtered_df_update['current_team'] = filtered_df['teamname']
-            filtered_df_update['statcast_status'] = filtered_df['statcast_status']
-            filtered_df_update['on_tv'] = filtered_df['ON_TV']
-            filtered_df_update['game_info'] = filtered_df['game_info']
-            final_df = filtered_df_update.iloc[:, [5, 6, 0, 2, 1, 3, 4, 7, 8, 9]]
+            stat_cols = ['ip', 'h', 'bb', 'k', 'er']
+            filtered_df_update = filtered_df[stat_cols].astype(str).apply(lambda x: x + ' ' + x.name.upper())
+            filtered_df_update['full_name'] = filtered_df['full_name'].values
+            filtered_df_update['current_team'] = filtered_df['teamname'].values
+            filtered_df_update['on_tv'] = filtered_df['ON_TV'].values
+            filtered_df_update['game_info'] = filtered_df['game_info'].values
+            final_df = filtered_df_update[['full_name', 'current_team', 'ip', 'h', 'bb', 'k', 'er', 'on_tv', 'game_info']]
 
             headers = {
-                (True, True): '<span style="font-size: 20pt; color: #3366ff;"><strong>Statcast Games - TV</strong></span>',
-                (True, False): '<span style="font-size: 20pt; color: #339966;"><strong>Statcast Games - No TV</strong></span>',
-                (False, True): '<span style="font-size: 20pt; color: #cf5606;"><strong>No Statcast - TV</strong></span>',
-                (False, False): '<span style="font-size: 20pt; color: #940a0a;"><strong>No Statcast - No TV</strong></span>'
+                True:  '<span style="font-size: 20pt; color: #3366ff;"><strong>On TV</strong></span>',
+                False: '<span style="font-size: 20pt; color: #339966;"><strong>Not on TV</strong></span>',
             }
 
-            header_order = [
-                ("Statcast Games", True),
-                ("Statcast Games", False),
-                ("No Statcast", True),
-                ("No Statcast", False)
-            ]
-            header_order_map = {item: index for index, item in enumerate(header_order)}
-
-            grouped = final_df.groupby(['statcast_status', 'on_tv'])
-            grouped_items = list(grouped)
-            sorted_groups = sorted(grouped_items, key=lambda x: header_order_map.get((x[0][0], x[0][1]), -1))
+            # TV games first, then non-TV
+            grouped = final_df.groupby('on_tv')
+            sorted_groups = sorted(grouped, key=lambda x: x[0], reverse=True)
 
             html_content = ""
-            for (statcast_status, on_tv_val), group in sorted_groups:
-                header_key = (statcast_status == "Statcast Games", on_tv_val)
-                html_content += headers[header_key] + "<br><br>"
+            for on_tv_val, group in sorted_groups:
+                html_content += headers[on_tv_val] + "<br><br>"
 
-                game_infos = group['game_info'].unique()
-                for game_info in game_infos:
-                    html_content += f"{game_info}<br>&nbsp;<br>"
+                for game_info_val in group['game_info'].unique():
+                    html_content += f"{game_info_val}<br>&nbsp;<br>"
                 html_content += "&nbsp;<br>"
 
-                for index, row in group.iterrows():
+                for _, row in group.iterrows():
                     formatted_string = (
                         f"<strong>{row['full_name']} ({row['current_team']}) - "
                         f"{row['ip']}, {row['er']}, {row['h']}, {row['bb']}, {row['k']}.</strong>"
@@ -168,9 +135,9 @@ else:
 
             st.write("File created successfully!")
             st.download_button(
-                f"Download Text File for Pitcher Performances from {date + timedelta(days=-1)}",
+                f"Download Text File for Pitcher Performances from {selected_date + timedelta(days=-1)}",
                 html_content,
-                file_name=f"output_{date + timedelta(days=-1)}.txt"
+                file_name=f"output_{selected_date + timedelta(days=-1)}.txt"
             )
 
         except Exception as e:
@@ -183,10 +150,10 @@ try:
     on_tv_today = request_today.json()
     on_tv_today_df = parse_game_data(on_tv_today)
 
-    game_info_today = statsapi.schedule(date)
+    game_info_today = statsapi.schedule(selected_date)
 
     if not game_info_today:
-        st.warning(f"No games scheduled for {date}. The today's TV pitcher list cannot be generated.")
+        st.warning(f"No games scheduled for {selected_date}. The today's TV pitcher list cannot be generated.")
     else:
         games_df = pd.DataFrame(game_info_today)
         games_df = games_df[['game_id', 'home_probable_pitcher', 'away_probable_pitcher']]
@@ -212,7 +179,7 @@ Get morning updates to EVERY SP via my daily Plus Pitch Podcast AND SP Roundup a
             st.download_button(
                 label="Download Pitchers on TV for Today",
                 data=tv_content.encode('utf-8'),
-                file_name=f"pitcher_list_on_tv_{date}.txt"
+                file_name=f"pitcher_list_on_tv_{selected_date}.txt"
             )
 
 except Exception as e:
